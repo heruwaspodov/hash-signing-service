@@ -22,7 +22,7 @@ func Logger(_ *config.Config) func(http.Handler) http.Handler {
 			jsonHandler := slog.NewJSONHandler(os.Stderr, nil)
 			syslog := slog.New(jsonHandler)
 
-			logMessage := fmt.Sprintf("[%s] %s %s %s %s %s",
+			logMessage := fmt.Sprintf("[%s] %s %s %v %v %v",
 				r.Method,
 				r.RequestURI,
 				r.RemoteAddr,

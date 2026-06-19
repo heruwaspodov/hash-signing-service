@@ -8,6 +8,20 @@ import (
 	"io/ioutil"
 )
 
+type PathCertificateService struct {
+	AppCert   string
+	AppKey    string
+	AppSubCA  string
+	AppRootCA string
+}
+
+type CertificateService struct {
+	Key    *rsa.PrivateKey
+	Cert   *x509.Certificate
+	SubCA  *x509.Certificate
+	RootCA *x509.Certificate
+}
+
 type CertData struct {
 	Key    *rsa.PrivateKey
 	Cert   *x509.Certificate

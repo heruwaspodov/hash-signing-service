@@ -28,7 +28,9 @@ func (r *Route) Init() *mux.Router {
 	router.Use(middleware.SetConfigInContext(r.config))
 
 	router.HandleFunc("/", handlers.RootHandler).Methods("GET")
-	router.HandleFunc("/hash_signing", handlers.Signing).Methods("POST")
+
+	api := router.PathPrefix("/api/v1").Subrouter()
+	api.HandleFunc("/hash-sign", handlers.HashSign).Methods("POST")
 
 	return router
 }

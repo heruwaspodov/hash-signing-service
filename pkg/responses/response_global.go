@@ -15,10 +15,6 @@ type ResponseError struct {
 	Code    string `json:"code"`
 }
 
-type ResponseData struct {
-	Data interface{} `json:"data"`
-}
-
 func RespondWithError(w http.ResponseWriter, statusCode int, message string, code string) {
 	w.WriteHeader(statusCode)
 	w.Header().Set("Content-Type", "application/json")

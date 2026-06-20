@@ -19,7 +19,7 @@ import (
 	"hash-signing-service/pkg/responses"
 )
 
-// newTestConfig returns a config with a real RSA key injected.
+// newTestConfig returns a config with FileSigner backed by a fresh RSA key.
 func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -28,6 +28,7 @@ func newTestConfig(t *testing.T) *config.Config {
 	}
 	cfg := config.New()
 	cfg.Certificate = services.CertificateService{Key: key}
+	cfg.Signer = services.NewFileSigner(key)
 	return cfg
 }
 
@@ -65,9 +66,9 @@ func TestHashSign_NoConfigInContext_Returns500(t *testing.T) {
 	assertErrorCode(t, w, "internal_error")
 }
 
-func TestHashSign_NilPrivateKey_Returns500(t *testing.T) {
+func TestHashSign_NilSigner_Returns500(t *testing.T) {
 	cfg := config.New()
-	cfg.Certificate = services.CertificateService{Key: nil}
+	cfg.Signer = nil
 
 	r := makeRequest(t, map[string]any{
 		"hash":      []string{digestB64("x")},

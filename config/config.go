@@ -17,6 +17,22 @@ type Config struct {
 	EnableLogger   bool
 	CertPath       services.PathCertificateService
 	Certificate    services.CertificateService
+
+	// SignerBackend selects the signing backend: "file" (default) or "pkcs11".
+	SignerBackend string
+	// HSM holds connection config for the PKCS#11 backend.
+	HSM    HSMConfig
+	// Signer is the initialized signing backend, set by main after startup.
+	Signer services.Signer
+}
+
+// HSMConfig holds PKCS#11 connection parameters.
+// Used when SIGNER_BACKEND=pkcs11.
+type HSMConfig struct {
+	ModulePath string // path to libsofthsm2.so or cloud HSM PKCS#11 library
+	TokenLabel string // CKA_LABEL of the token
+	PIN        string // user PIN
+	KeyLabel   string // CKA_LABEL of the private key object
 }
 
 func New() *Config {
@@ -33,6 +49,13 @@ func New() *Config {
 			AppKey:    getEnv("CERT_KEY_FILE", "certs/signing.key"),
 			AppSubCA:  getEnv("CERT_SUB_CA_FILE", "certs/sub-ca.crt"),
 			AppRootCA: getEnv("CERT_ROOT_CA_FILE", "certs/root-ca.crt"),
+		},
+		SignerBackend: getEnv("SIGNER_BACKEND", "file"),
+		HSM: HSMConfig{
+			ModulePath: getEnv("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so"),
+			TokenLabel: getEnv("HSM_TOKEN_LABEL", ""),
+			PIN:        getEnv("HSM_PIN", ""),
+			KeyLabel:   getEnv("HSM_KEY_LABEL", ""),
 		},
 	}
 }

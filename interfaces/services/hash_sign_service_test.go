@@ -22,6 +22,13 @@ func testKey(t *testing.T) *rsa.PrivateKey {
 	return key
 }
 
+// testSigner returns a FileSigner backed by a fresh test key.
+func testSigner(t *testing.T) (*services.FileSigner, *rsa.PrivateKey) {
+	t.Helper()
+	key := testKey(t)
+	return services.NewFileSigner(key), key
+}
+
 // testHashB64 computes a SHA-256 digest of data and returns it base64-encoded.
 func testHashB64(data string) string {
 	h := sha256.Sum256([]byte(data))
@@ -29,24 +36,24 @@ func testHashB64(data string) string {
 }
 
 func TestNewRawHashSignService_UnsupportedOID(t *testing.T) {
-	key := testKey(t)
-	_, err := services.NewRawHashSignService(testHashB64("x"), "9.9.9.9", key)
+	signer, _ := testSigner(t)
+	_, err := services.NewRawHashSignService(testHashB64("x"), "9.9.9.9", signer)
 	if err == nil {
 		t.Fatal("expected error for unsupported OID, got nil")
 	}
 }
 
 func TestNewRawHashSignService_InvalidBase64(t *testing.T) {
-	key := testKey(t)
-	_, err := services.NewRawHashSignService("not!!valid==base64", "2.16.840.1.101.3.4.2.1", key)
+	signer, _ := testSigner(t)
+	_, err := services.NewRawHashSignService("not!!valid==base64", "2.16.840.1.101.3.4.2.1", signer)
 	if err == nil {
 		t.Fatal("expected error for invalid base64, got nil")
 	}
 }
 
 func TestNewRawHashSignService_Valid(t *testing.T) {
-	key := testKey(t)
-	svc, err := services.NewRawHashSignService(testHashB64("hello"), "2.16.840.1.101.3.4.2.1", key)
+	signer, _ := testSigner(t)
+	svc, err := services.NewRawHashSignService(testHashB64("hello"), "2.16.840.1.101.3.4.2.1", signer)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,13 +63,13 @@ func TestNewRawHashSignService_Valid(t *testing.T) {
 }
 
 func TestCall_SHA256_SignatureVerifies(t *testing.T) {
-	key := testKey(t)
+	signer, key := testSigner(t)
 	data := "signed attributes content"
 
 	digest := sha256.Sum256([]byte(data))
 	hashB64 := base64.StdEncoding.EncodeToString(digest[:])
 
-	svc, err := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.1", key)
+	svc, err := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.1", signer)
 	if err != nil {
 		t.Fatalf("NewRawHashSignService: %v", err)
 	}
@@ -84,13 +91,13 @@ func TestCall_SHA256_SignatureVerifies(t *testing.T) {
 }
 
 func TestCall_SHA512_SignatureVerifies(t *testing.T) {
-	key := testKey(t)
+	signer, key := testSigner(t)
 	data := "another document"
 
 	digest := sha512.Sum512([]byte(data))
 	hashB64 := base64.StdEncoding.EncodeToString(digest[:])
 
-	svc, err := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.3", key)
+	svc, err := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.3", signer)
 	if err != nil {
 		t.Fatalf("NewRawHashSignService: %v", err)
 	}
@@ -111,13 +118,13 @@ func TestCall_SHA512_SignatureVerifies(t *testing.T) {
 }
 
 func TestCall_DifferentInputsProduceDifferentSignatures(t *testing.T) {
-	key := testKey(t)
+	signer, _ := testSigner(t)
 
 	d1 := sha256.Sum256([]byte("doc one"))
 	d2 := sha256.Sum256([]byte("doc two"))
 
-	svc1, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d1[:]), "2.16.840.1.101.3.4.2.1", key)
-	svc2, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d2[:]), "2.16.840.1.101.3.4.2.1", key)
+	svc1, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d1[:]), "2.16.840.1.101.3.4.2.1", signer)
+	svc2, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d2[:]), "2.16.840.1.101.3.4.2.1", signer)
 
 	sig1, _ := svc1.Call()
 	sig2, _ := svc2.Call()
@@ -129,12 +136,11 @@ func TestCall_DifferentInputsProduceDifferentSignatures(t *testing.T) {
 
 func TestCall_DoesNotReHash(t *testing.T) {
 	// If the service re-hashed the input, verifying with the original digest would fail.
-	// This test confirms no re-hashing happens.
-	key := testKey(t)
+	signer, key := testSigner(t)
 	digest := sha256.Sum256([]byte("payload"))
 	hashB64 := base64.StdEncoding.EncodeToString(digest[:])
 
-	svc, _ := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.1", key)
+	svc, _ := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.1", signer)
 	sigB64, _ := svc.Call()
 	sigBytes, _ := base64.StdEncoding.DecodeString(sigB64)
 

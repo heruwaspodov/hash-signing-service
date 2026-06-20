@@ -3,138 +3,106 @@ package main
 import (
 	"crypto/rsa"
 	"crypto/x509"
-	"hash-signing-service/config"
-	"hash-signing-service/interfaces/routes"
-	"hash-signing-service/interfaces/services"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 
 	"github.com/joho/godotenv"
+
+	"hash-signing-service/config"
+	"hash-signing-service/interfaces/routes"
+	"hash-signing-service/interfaces/services"
 )
 
 func init() {
 	// load .env file
 	err := godotenv.Load(".env")
-
 	if err != nil {
 		log.Fatalf("Error loading .env file")
 	}
 }
 
 func main() {
-	// Init Config
-	config := config.New()
+	cfg := config.New()
 
-	basePath, errBasePath := os.Getwd()
-	if errBasePath != nil {
-		log.Fatalf("Error getting current directory: %v", errBasePath)
+	basePath, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("Error getting current directory: %v", err)
 	}
 
-	// Init Key
-	key, errorKey := initKeyFile(basePath, config)
+	// Init Signer — backend selected by SIGNER_BACKEND env.
+	switch cfg.SignerBackend {
+	case "pkcs11":
+		hsmSigner, err := services.NewHSMSigner(
+			cfg.HSM.ModulePath,
+			cfg.HSM.TokenLabel,
+			cfg.HSM.PIN,
+			cfg.HSM.KeyLabel,
+		)
+		if err != nil {
+			log.Fatalf("init HSM signer: %v", err)
+		}
+		defer hsmSigner.Close()
+		cfg.Signer = hsmSigner
+		log.Printf("Signer backend: pkcs11 (module: %s, token: %s, key: %s)",
+			cfg.HSM.ModulePath, cfg.HSM.TokenLabel, cfg.HSM.KeyLabel)
 
-	if errorKey != nil {
-		log.Fatalf("Error loading Key certificate: %v", errorKey)
-		os.Exit(1)
+	default: // "file"
+		key, err := initKeyFile(basePath, cfg)
+		if err != nil {
+			log.Fatalf("Error loading private key: %v", err)
+		}
+		cfg.Certificate.Key = key
+		cfg.Signer = services.NewFileSigner(key)
+		log.Printf("Signer backend: file (key: %s)", cfg.CertPath.AppKey)
 	}
 
-	config.Certificate.Key = key
-
-	// Init Cert
-	cert, errorCert := initCertFile(basePath, config)
-
-	if errorCert != nil {
-		log.Fatalf("Error loading Cert certificate: %v", errorCert)
-		os.Exit(1)
+	// Load certificate chain (used by msign-backend for CMS embedding reference).
+	cert, err := initCertFile(basePath, cfg)
+	if err != nil {
+		log.Fatalf("Error loading signing cert: %v", err)
 	}
+	cfg.Certificate.Cert = cert
 
-	config.Certificate.Cert = cert
-
-	// Init SubCA
-	subCA, errorSubCA := initCertSubCAFile(basePath, config)
-
-	if errorSubCA != nil {
-		log.Fatalf("Error loading SubCA certificate: %v", errorSubCA)
-		os.Exit(1)
+	subCA, err := initCertSubCAFile(basePath, cfg)
+	if err != nil {
+		log.Fatalf("Error loading sub-CA cert: %v", err)
 	}
+	cfg.Certificate.SubCA = subCA
 
-	config.Certificate.SubCA = subCA
-
-	// Init RootCA
-	rootCA, errorRootCA := initCertRootCAFile(basePath, config)
-	if errorRootCA != nil {
-		log.Fatalf("Error loading SubCA certificate: %v", errorSubCA)
-		os.Exit(1)
+	rootCA, err := initCertRootCAFile(basePath, cfg)
+	if err != nil {
+		log.Fatalf("Error loading root-CA cert: %v", err)
 	}
+	cfg.Certificate.RootCA = rootCA
 
-	config.Certificate.RootCA = rootCA
-
-	// Init Router
-	router := routes.New(config).Init()
-
-	// Init Server
+	// Init Router & Server.
+	router := routes.New(cfg).Init()
 	server := &http.Server{
-		Addr:    ":" + config.AppPort,
+		Addr:    ":" + cfg.AppPort,
 		Handler: router,
 	}
 
-	if config.Certificate.Key == nil {
-		log.Fatal("Private key failed to load")
-	}
+	log.Println("Server is starting on :" + cfg.AppPort + "...")
 
-	log.Printf("Private key loaded successfully: %v", config.Certificate.Key != nil)
-
-	log.Println("Server is starting on :" + config.AppPort + "...")
-
-	err := server.ListenAndServe()
-	if err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal("Error starting the server: ", err)
-		os.Exit(1)
 	}
 }
 
-func initKeyFile(basePath string, config *config.Config) (*rsa.PrivateKey, error) {
-	keyFile := filepath.Join(basePath, config.CertPath.AppKey)
-
-	cert, errLoadKeyFile := services.LoadKey(keyFile)
-	if errLoadKeyFile != nil {
-		return nil, errLoadKeyFile
-	}
-
-	return cert, nil
+func initKeyFile(basePath string, cfg *config.Config) (*rsa.PrivateKey, error) {
+	return services.LoadKey(filepath.Join(basePath, cfg.CertPath.AppKey))
 }
 
-func initCertFile(basePath string, config *config.Config) (*x509.Certificate, error) {
-	certFile := filepath.Join(basePath, config.CertPath.AppCert)
-
-	cert, errLoadCertFile := services.LoadCert(certFile)
-	if errLoadCertFile != nil {
-		return nil, errLoadCertFile
-	}
-
-	return cert, nil
+func initCertFile(basePath string, cfg *config.Config) (*x509.Certificate, error) {
+	return services.LoadCert(filepath.Join(basePath, cfg.CertPath.AppCert))
 }
 
-func initCertSubCAFile(basePath string, config *config.Config) (*x509.Certificate, error) {
-	certFile := filepath.Join(basePath, config.CertPath.AppSubCA)
-
-	cert, errLoadCertFile := services.LoadCert(certFile)
-	if errLoadCertFile != nil {
-		return nil, errLoadCertFile
-	}
-
-	return cert, nil
+func initCertSubCAFile(basePath string, cfg *config.Config) (*x509.Certificate, error) {
+	return services.LoadCert(filepath.Join(basePath, cfg.CertPath.AppSubCA))
 }
 
-func initCertRootCAFile(basePath string, config *config.Config) (*x509.Certificate, error) {
-	certFile := filepath.Join(basePath, config.CertPath.AppRootCA)
-
-	cert, errLoadCertFile := services.LoadCert(certFile)
-	if errLoadCertFile != nil {
-		return nil, errLoadCertFile
-	}
-
-	return cert, nil
+func initCertRootCAFile(basePath string, cfg *config.Config) (*x509.Certificate, error) {
+	return services.LoadCert(filepath.Join(basePath, cfg.CertPath.AppRootCA))
 }

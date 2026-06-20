@@ -194,6 +194,87 @@ curl -sS -X POST http://localhost:7777/api/v1/hash-sign \
 
 ---
 
+## Signer Backend
+
+The service supports two signing backends, switchable via `SIGNER_BACKEND` env — no code changes required.
+
+| `SIGNER_BACKEND` | Backend | When to use |
+|---|---|---|
+| `file` (default) | PEM private key from disk | Local development, CI |
+| `pkcs11` | PKCS#11 HSM (SoftHSM2 / CloudHSM) | Staging, production |
+
+### Architecture
+
+```
+handler → RawHashSignService → Signer interface
+                                    ├── FileSigner   (SIGNER_BACKEND=file)
+                                    └── HSMSigner    (SIGNER_BACKEND=pkcs11)
+```
+
+Swapping backends only requires changing env vars — handler and service layer are unaffected.
+
+---
+
+### SIGNER_BACKEND=file (default)
+
+```dotenv
+SIGNER_BACKEND=file
+CERT_KEY_FILE=certs/signing.key
+```
+
+No additional setup needed. Service loads the PEM private key at startup.
+
+---
+
+### SIGNER_BACKEND=pkcs11
+
+Uses PKCS#11 via [miekg/pkcs11](https://github.com/miekg/pkcs11). Compatible with SoftHSM2 (dev), AWS CloudHSM, Google Cloud KMS, and Azure Managed HSM.
+
+```dotenv
+SIGNER_BACKEND=pkcs11
+HSM_MODULE_PATH=/usr/lib/softhsm/libsofthsm2.so   # path to PKCS#11 .so / .dylib
+HSM_TOKEN_LABEL=dev-signing-token                  # CKA_LABEL of the token
+HSM_PIN=1234                                       # user PIN
+HSM_KEY_LABEL=pdf-sign-key                         # CKA_LABEL of the private key object
+```
+
+**Module path by provider:**
+
+| Provider | Module path |
+|---|---|
+| SoftHSM2 (Linux) | `/usr/lib/softhsm/libsofthsm2.so` |
+| SoftHSM2 (macOS Homebrew) | `/opt/homebrew/lib/softhsm/libsofthsm2.dylib` |
+| AWS CloudHSM | `/opt/cloudhsm/lib/libcloudhsm_pkcs11.so` |
+
+**SoftHSM2 setup for local dev:**
+
+```bash
+# Install
+brew install softhsm          # macOS
+apt install softhsm2          # Ubuntu/Debian
+
+# Initialize a token
+softhsm2-util --init-token --free \
+  --label "dev-signing-token" \
+  --pin 1234 \
+  --so-pin 0000
+
+# Generate RSA-2048 key pair inside SoftHSM
+pkcs11-tool --module /usr/lib/softhsm/libsofthsm2.so \
+  --login --pin 1234 \
+  --keypairgen --key-type rsa:2048 \
+  --label "pdf-sign-key" \
+  --usage-sign
+```
+
+> **Important:** When migrating from `file` to a real cloud HSM, the private key inside the HSM must correspond to the public certificate embedded in the PDF's CMS structure by `msign-backend`.
+
+**Why CKM_RSA_PKCS and not CKM_SHA256_RSA_PKCS?**
+
+`CKM_SHA256_RSA_PKCS` hashes its input before signing — but this service receives a **pre-computed** digest. Using it would double-hash the data, producing an invalid PDF signature. The service uses `CKM_RSA_PKCS` (raw RSA) and manually prepends the ASN.1 DigestInfo prefix to match the output of Go's `rsa.SignPKCS1v15`.
+
+---
+
 ## Cryptographic Rules
 
 These rules must be followed for the signature to be accepted by PDF validators (Adobe Acrobat, iText, etc.):
@@ -228,8 +309,11 @@ hash-signing-service/
 │   ├── routes/
 │   │   └── route.go                # Route registration
 │   └── services/
-│       ├── cert_services.go        # Certificate and key loading
-│       └── hash_sign_service.go    # RSA signing logic
+│       ├── signer.go               # Signer interface + OID maps + DigestInfo prefixes
+│       ├── file_signer.go          # FileSigner — PEM key (SIGNER_BACKEND=file)
+│       ├── hsm_signer.go           # HSMSigner — PKCS#11 (SIGNER_BACKEND=pkcs11)
+│       ├── hash_sign_service.go    # Validates request, delegates to Signer
+│       └── cert_services.go        # Certificate and key loading
 ├── pkg/
 │   ├── requests/
 │   │   └── request_hash_sign.go    # Request struct

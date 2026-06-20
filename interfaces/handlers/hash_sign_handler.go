@@ -24,8 +24,8 @@ func HashSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cfg.Certificate.Key == nil {
-		renderHashSignError(w, http.StatusInternalServerError, "internal_error", "private key not initialized")
+	if cfg.Signer == nil {
+		renderHashSignError(w, http.StatusInternalServerError, "internal_error", "signer not initialized")
 		return
 	}
 
@@ -55,7 +55,7 @@ func HashSign(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// NewRawHashSignService validates the hash_algo OID and decodes the base64 digest.
-		svc, err := services.NewRawHashSignService(h, req.HashAlgo, cfg.Certificate.Key)
+		svc, err := services.NewRawHashSignService(h, req.HashAlgo, cfg.Signer)
 		if err != nil {
 			renderHashSignError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return

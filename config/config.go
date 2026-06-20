@@ -33,6 +33,7 @@ type HSMConfig struct {
 	TokenLabel string // CKA_LABEL of the token
 	PIN        string // user PIN
 	KeyLabel   string // CKA_LABEL of the private key object
+	KeyID      string // CKA_ID of the private key (hex string, e.g. "01"); used alongside KeyLabel to avoid duplicate-label ambiguity
 }
 
 func New() *Config {
@@ -56,6 +57,7 @@ func New() *Config {
 			TokenLabel: getEnv("HSM_TOKEN_LABEL", ""),
 			PIN:        getEnv("HSM_PIN", ""),
 			KeyLabel:   getEnv("HSM_KEY_LABEL", ""),
+			KeyID:      getEnv("HSM_KEY_ID", ""),
 		},
 	}
 }

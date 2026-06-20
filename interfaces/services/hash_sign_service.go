@@ -26,6 +26,12 @@ func NewRawHashSignService(hashB64 string, hashAlgoOID string, signer Signer) (*
 		return nil, errors.New("invalid base64 hash")
 	}
 
+	// Validate digest length matches the declared algorithm.
+	// Prevents wrong-algorithm payloads from being signed silently.
+	if expected := expectedHashLen[hashAlgoOID]; len(hashBytes) != expected {
+		return nil, fmt.Errorf("hash length %d does not match hash_algo %s (expected %d bytes)", len(hashBytes), hashAlgoOID, expected)
+	}
+
 	return &RawHashSignService{
 		hashBytes:   hashBytes,
 		hashAlgoOID: hashAlgoOID,

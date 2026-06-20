@@ -35,6 +35,16 @@ func testHashB64(data string) string {
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
+func TestNewRawHashSignService_WrongHashLength_SHA256(t *testing.T) {
+	signer, _ := testSigner(t)
+	// Send 20 bytes base64 but claim SHA-256 (needs 32 bytes) — must reject.
+	short := base64.StdEncoding.EncodeToString(make([]byte, 20))
+	_, err := services.NewRawHashSignService(short, "2.16.840.1.101.3.4.2.1", signer)
+	if err == nil {
+		t.Fatal("expected error for wrong hash length, got nil")
+	}
+}
+
 func TestNewRawHashSignService_UnsupportedOID(t *testing.T) {
 	signer, _ := testSigner(t)
 	_, err := services.NewRawHashSignService(testHashB64("x"), "9.9.9.9", signer)

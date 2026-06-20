@@ -16,11 +16,8 @@ import (
 )
 
 func init() {
-	// load .env file
-	err := godotenv.Load(".env")
-	if err != nil {
-		log.Fatalf("Error loading .env file")
-	}
+	// .env is optional — in Docker/Kubernetes env vars are injected directly.
+	_ = godotenv.Load(".env")
 }
 
 func main() {
@@ -39,6 +36,7 @@ func main() {
 			cfg.HSM.TokenLabel,
 			cfg.HSM.PIN,
 			cfg.HSM.KeyLabel,
+			cfg.HSM.KeyID,
 		)
 		if err != nil {
 			log.Fatalf("init HSM signer: %v", err)

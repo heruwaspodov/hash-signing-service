@@ -17,6 +17,15 @@ var HashAlgoOIDMap = map[string]crypto.Hash{
 	"2.16.840.1.101.3.4.2.3": crypto.SHA512, // SHA-512
 }
 
+// expectedHashLen maps digest OIDs to the required digest byte length.
+// Validates that the caller actually sent a digest of the right algorithm,
+// not a truncated or wrong-algorithm payload that HSM would silently sign.
+var expectedHashLen = map[string]int{
+	"2.16.840.1.101.3.4.2.1": 32, // SHA-256
+	"2.16.840.1.101.3.4.2.2": 48, // SHA-384
+	"2.16.840.1.101.3.4.2.3": 64, // SHA-512
+}
+
 // digestInfoPrefix maps digest OIDs to their ASN.1 DigestInfo prefix bytes.
 // Required for CKM_RSA_PKCS: HSM expects DigestInfo || hash, not raw hash bytes.
 // rsa.SignPKCS1v15 (Go stdlib) prepends this automatically — PKCS#11 does not.

@@ -228,15 +228,27 @@ No additional setup needed. Service loads the PEM private key at startup.
 
 ### SIGNER_BACKEND=pkcs11
 
-Uses PKCS#11 via [miekg/pkcs11](https://github.com/miekg/pkcs11). Compatible with SoftHSM2 (dev), AWS CloudHSM, Google Cloud KMS, and Azure Managed HSM.
+Uses PKCS#11 via [miekg/pkcs11](https://github.com/miekg/pkcs11). Compatible with **SoftHSM2** (dev) and **AWS CloudHSM** — both expose a native PKCS#11 shared library (`.so`/`.dylib`).
+
+> **GCP Cloud KMS and Azure Key Vault** use REST/SDK APIs, not a PKCS#11 module. They are **not** drop-in compatible with this backend. Integrating them requires a separate `Signer` implementation using their respective Go SDKs (`cloud.google.com/go/kms`, `github.com/Azure/azure-sdk-for-go`).
 
 ```dotenv
 SIGNER_BACKEND=pkcs11
 HSM_MODULE_PATH=/usr/lib/softhsm/libsofthsm2.so   # path to PKCS#11 .so / .dylib
-HSM_TOKEN_LABEL=dev-signing-token                  # CKA_LABEL of the token
-HSM_PIN=1234                                       # user PIN
-HSM_KEY_LABEL=pdf-sign-key                         # CKA_LABEL of the private key object
+HSM_TOKEN_LABEL=dev-signing-token                  # which token (partition) to use
+HSM_PIN=1234                                       # user PIN to authenticate
+HSM_KEY_LABEL=pdf-sign-key                         # which private key to use for signing
+# HSM_KEY_ID=01                                    # hex CKA_ID — set if multiple keys share the same label
 ```
+
+**Understanding the HSM env vars:**
+
+| Var | Concept | Analogy |
+|---|---|---|
+| `HSM_TOKEN_LABEL` | Named partition/slot inside the HSM | A labelled drawer in the safe |
+| `HSM_PIN` | User password to unlock the token | PIN to open that drawer |
+| `HSM_KEY_LABEL` | CKA_LABEL of the private key object | Name of the specific key inside the drawer |
+| `HSM_KEY_ID` | CKA_ID (hex) of the key — optional disambiguator | Key serial number; use when multiple keys share the same label |
 
 **Module path by provider:**
 
@@ -264,14 +276,19 @@ pkcs11-tool --module /usr/lib/softhsm/libsofthsm2.so \
   --login --pin 1234 \
   --keypairgen --key-type rsa:2048 \
   --label "pdf-sign-key" \
+  --id 01 \
   --usage-sign
 ```
 
-> **Important:** When migrating from `file` to a real cloud HSM, the private key inside the HSM must correspond to the public certificate embedded in the PDF's CMS structure by `msign-backend`.
+> **Important:** When migrating from `file` to a real HSM, the private key inside the HSM must correspond to the public certificate embedded in the PDF's CMS structure by `msign-backend`.
 
 **Why CKM_RSA_PKCS and not CKM_SHA256_RSA_PKCS?**
 
 `CKM_SHA256_RSA_PKCS` hashes its input before signing — but this service receives a **pre-computed** digest. Using it would double-hash the data, producing an invalid PDF signature. The service uses `CKM_RSA_PKCS` (raw RSA) and manually prepends the ASN.1 DigestInfo prefix to match the output of Go's `rsa.SignPKCS1v15`.
+
+**Production note — session pool:**
+
+The current implementation uses a single PKCS#11 session protected by a mutex. This serializes all signing requests, which is fine for dev and low-traffic use. For high-throughput production, replace the mutex with a session pool (one session per goroutine up to a configurable max).
 
 ---
 

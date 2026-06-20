@@ -41,6 +41,11 @@ func HashSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(req.Hash) > 10 {
+		renderHashSignError(w, http.StatusBadRequest, "bad_request", "hash array exceeds maximum of 10 elements")
+		return
+	}
+
 	// Sign each hash in order, preserving index so signatures[i] corresponds to hash[i].
 	signatures := make([]string, 0, len(req.Hash))
 	for i, h := range req.Hash {

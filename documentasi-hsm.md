@@ -25,7 +25,7 @@ Signed by: WSPDV TAMPAN
 
 ---
 
-## 0. Konsep Singkat
+# 0. Konsep Singkat
 
 SoftHSM menyimpan private key di token HSM lokal.
 
@@ -54,7 +54,7 @@ banyak Root CA / Sub CA berbeda
 
 ---
 
-## 1. Install Package
+# 1. Install Package
 
 ```bash
 sudo apt update
@@ -81,7 +81,7 @@ atau:
 
 ---
 
-## 2. Setup Config SoftHSM
+# 2. Setup Config SoftHSM
 
 Jika ingin pakai config di home user:
 
@@ -121,7 +121,7 @@ softhsm2-util --show-slots
 
 ---
 
-## 3. Init Token SoftHSM
+# 3. Init Token SoftHSM
 
 ```bash
 softhsm2-util \
@@ -153,7 +153,7 @@ Label: WSPDV-HSM
 
 ---
 
-## 4. Generate Private Key di SoftHSM
+# 4. Generate Private Key di SoftHSM
 
 Contoh generate RSA 3072 untuk signing PDF:
 
@@ -199,7 +199,7 @@ Private key tidak keluar dari SoftHSM.
 
 ---
 
-## 5. Export Public Key dari SoftHSM
+# 5. Export Public Key dari SoftHSM
 
 Export public key DER:
 
@@ -239,7 +239,7 @@ Output harus seperti:
 
 ---
 
-## 6. Generate Root CA
+# 6. Generate Root CA
 
 Root CA adalah certificate paling atas.
 
@@ -267,7 +267,7 @@ openssl x509 -in root-ca.crt -noout -subject -issuer
 
 ---
 
-## 7. Generate Sub CA
+# 7. Generate Sub CA
 
 Generate private key Sub CA:
 
@@ -326,7 +326,7 @@ issuer=C=ID, O=WSPDV, CN=WSPDV Root CA
 
 ---
 
-## 8. Generate CSR Signing Certificate dari Key SoftHSM
+# 8. Generate CSR Signing Certificate dari Key SoftHSM
 
 CSR ini dibuat dari private key yang ada di SoftHSM.
 
@@ -368,7 +368,7 @@ Signed by: WSPDV TAMPAN
 
 ---
 
-## 9. Generate Signing Certificate dari Sub CA
+# 9. Generate Signing Certificate dari Sub CA
 
 Buat extension file untuk signing certificate:
 
@@ -412,7 +412,7 @@ issuer=C=ID, O=WSPDV, CN=WSPDV PDF Sub CA
 
 ---
 
-## 10. Buat Certificate Chain
+# 10. Buat Certificate Chain
 
 Gabungkan Sub CA dan Root CA:
 
@@ -442,7 +442,7 @@ signing.crt: OK
 
 ---
 
-## 11. Verifikasi Public Key Signing Certificate Sama dengan SoftHSM
+# 11. Verifikasi Public Key Signing Certificate Sama dengan SoftHSM
 
 Export public key dari signing certificate:
 
@@ -460,9 +460,9 @@ Jika tidak ada output, berarti sama.
 
 ---
 
-## 12. File yang Dihasilkan
+# 12. File yang Dihasilkan
 
-### Private Key
+## Private Key
 
 ```text
 root-ca.key
@@ -478,21 +478,21 @@ Private key pdf-sign-key tidak berbentuk file.
 Dia ada di SoftHSM.
 ```
 
-### Public Key
+## Public Key
 
 ```text
 public.der
 public.pem
 ```
 
-### CSR
+## CSR
 
 ```text
 sub-ca.csr
 signing.csr
 ```
 
-### Certificate
+## Certificate
 
 ```text
 root-ca.crt
@@ -500,21 +500,21 @@ sub-ca.crt
 signing.crt
 ```
 
-### Chain
+## Chain
 
 ```text
 chain.crt
 fullchain.crt
 ```
 
-### Extension Config
+## Extension Config
 
 ```text
 sub-ca.ext
 signing.ext
 ```
 
-### Serial Number
+## Serial Number
 
 ```text
 root-ca.srl
@@ -523,7 +523,7 @@ sub-ca.srl
 
 ---
 
-## 13. Untuk HexaPDF / PDF Signing
+# 13. Untuk HexaPDF / PDF Signing
 
 Biasanya yang dibutuhkan:
 
@@ -565,7 +565,7 @@ Embed ke PDF bersama signing.crt + chain.crt
 
 ---
 
-## 14. Membuat Signed By Berbeda dengan Key yang Sama
+# 14. Membuat Signed By Berbeda dengan Key yang Sama
 
 Jika ingin Adobe menampilkan nama berbeda:
 
@@ -941,7 +941,7 @@ Signed by: CIBA TAMPAN
 
 ---
 
-## 16. Catatan Adobe Trust
+# 16. Catatan Adobe Trust
 
 Jika Root CA self-signed:
 
@@ -1754,7 +1754,44 @@ Gunakan token label yang muncul dari pkcs11-tool --list-slots.
 
 ## 18.6 Import Private Key ke Token Baru
 
-Untuk SoftHSM, private key PEM PKCS#8 bisa langsung di-import:
+Untuk SoftHSM, private key **PEM PKCS#8** bisa langsung di-import dengan
+`softhsm2-util`.
+
+Pastikan header file:
+
+```text
+-----BEGIN PRIVATE KEY-----
+```
+
+Jika private key masih format PKCS#1:
+
+```text
+-----BEGIN RSA PRIVATE KEY-----
+```
+
+convert dulu ke PKCS#8 PEM:
+
+```bash
+openssl pkcs8 \
+  -topk8 \
+  -nocrypt \
+  -in certs/msign/private.pem \
+  -out /tmp/msign-private-pkcs8.pem
+```
+
+Lalu import file hasil convert:
+
+```bash
+softhsm2-util \
+  --import /tmp/msign-private-pkcs8.pem \
+  --token MSIGN-HSM \
+  --pin anaktampan \
+  --label msign-key \
+  --id 01
+```
+
+Jika private key sudah PKCS#8 PEM, seperti proses MSIGN yang dilakukan, import
+langsung:
 
 ```bash
 softhsm2-util \
@@ -1763,6 +1800,18 @@ softhsm2-util \
   --pin anaktampan \
   --label msign-key \
   --id 01
+```
+
+Untuk AWS CloudHSM atau import via `pkcs11-tool --write-object`, gunakan
+PKCS#8 DER seperti section 17.4:
+
+```bash
+openssl pkcs8 \
+  -topk8 \
+  -nocrypt \
+  -in certs/msign/private.pem \
+  -outform DER \
+  -out /tmp/msign-private.pk8.der
 ```
 
 Output sukses:

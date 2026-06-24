@@ -1975,3 +1975,297 @@ Sebelum dipakai oleh `msign-backend`, pastikan:
 [x] HSM_TOKEN_LABEL=MSIGN-HSM
 [x] signature HSM verified OK against signing.crt
 ```
+
+---
+
+# 19. AWS KMS sebagai Alternatif CloudHSM Dedicated
+
+Bagian ini menjelaskan cara memakai AWS KMS sebagai backend signing untuk
+memotong biaya dari AWS CloudHSM Dedicated (~$5.000/bulan) menjadi ~$1/bulan.
+
+## 19.1 Perbandingan
+
+```text
+Backend            Biaya/bulan   FIPS Level   Non-exportable   Setup
+------------------------------------------------------------------
+CloudHSM Dedicated ~$5.000       Level 3      Ya               Cluster + EC2
+AWS KMS            ~$1           Level 3      Ya (setelah import) API/SDK
+SoftHSM            Gratis        Tidak ada    Tidak            Dev only
+```
+
+AWS KMS memakai shared HSM (multi-tenant), tetapi setiap key terisolasi.
+Key tidak pernah keluar dari HSM AWS.
+
+## 19.2 Dua Pilihan Key di KMS
+
+### Pilihan A: Generate Key Baru di KMS
+
+Key dibuat langsung di KMS. Private key tidak pernah ada di luar HSM.
+Ini opsi paling aman secara compliance.
+
+Konsekuensi: perlu request certificate baru dari GlobalSign dengan public key baru.
+
+### Pilihan B: Import Private Key Existing ke KMS
+
+Private key yang sudah ada (misalnya dari CloudHSM) di-import ke KMS.
+Setelah import, key non-exportable dari KMS.
+
+Konsekuensi: bisa pakai certificate yang sudah ada tanpa request ulang ke GlobalSign.
+Catatan compliance: private key sempat ada dalam bentuk file sebelum import.
+
+---
+
+## 19.3 Pilihan A: Buat Key Baru di KMS
+
+```bash
+aws kms create-key \
+  --key-spec RSA_2048 \
+  --key-usage SIGN_VERIFY \
+  --description "msign-aatl-signing-key" \
+  --region ap-southeast-1
+```
+
+Catat `KeyId` dari output. Beri alias agar mudah direferensi:
+
+```bash
+aws kms create-alias \
+  --alias-name alias/msign-aatl \
+  --target-key-id <KeyId> \
+  --region ap-southeast-1
+```
+
+Export public key untuk request CSR ke GlobalSign:
+
+```bash
+aws kms get-public-key \
+  --key-id alias/msign-aatl \
+  --region ap-southeast-1 \
+  --output text \
+  --query PublicKey \
+  | base64 --decode > msign-kms-public.der
+
+openssl pkey \
+  -pubin \
+  -inform DER \
+  -in msign-kms-public.der \
+  -outform PEM \
+  -out msign-kms-public.pem
+```
+
+Kirim `msign-kms-public.pem` ke GlobalSign untuk di-sign menjadi AATL certificate.
+
+---
+
+## 19.4 Pilihan B: Import Private Key Existing ke KMS
+
+### Langkah 1 — Buat KMS Key dengan EXTERNAL origin
+
+```bash
+aws kms create-key \
+  --key-spec RSA_2048 \
+  --key-usage SIGN_VERIFY \
+  --origin EXTERNAL \
+  --description "msign-aatl-imported" \
+  --region ap-southeast-1
+```
+
+Catat `KeyId`.
+
+### Langkah 2 — Download wrapping key dan import token
+
+```bash
+aws kms get-parameters-for-import \
+  --key-id <KeyId> \
+  --wrapping-algorithm RSAES_OAEP_SHA_256 \
+  --wrapping-key-spec RSA_2048 \
+  --region ap-southeast-1 \
+  --output json > import-params.json
+
+# Extract wrapping public key
+cat import-params.json | python3 -c \
+  "import sys,json,base64; d=json.load(sys.stdin); open('wrapping-key.der','wb').write(base64.b64decode(d['PublicKey']))"
+
+# Extract import token
+cat import-params.json | python3 -c \
+  "import sys,json,base64; d=json.load(sys.stdin); open('import-token.bin','wb').write(base64.b64decode(d['ImportToken']))"
+```
+
+### Langkah 3 — Encrypt private key dengan wrapping key
+
+```bash
+# Convert private key ke PKCS#8 DER
+openssl pkcs8 \
+  -topk8 \
+  -nocrypt \
+  -in certs/msign/private.pem \
+  -outform DER \
+  -out /tmp/msign-private.pk8.der
+
+# Encrypt dengan wrapping key KMS
+openssl pkeyutl \
+  -encrypt \
+  -pubin \
+  -inkey wrapping-key.der \
+  -keyform DER \
+  -pkeyopt rsa_padding_mode:oaep \
+  -pkeyopt rsa_oaep_md:sha256 \
+  -in /tmp/msign-private.pk8.der \
+  -out /tmp/msign-encrypted-key.bin
+```
+
+### Langkah 4 — Import ke KMS
+
+```bash
+aws kms import-key-material \
+  --key-id <KeyId> \
+  --encrypted-key-material fileb:///tmp/msign-encrypted-key.bin \
+  --import-token fileb://import-token.bin \
+  --expiration-model KEY_MATERIAL_DOES_NOT_EXPIRE \
+  --region ap-southeast-1
+```
+
+Output sukses:
+
+```text
+(tidak ada error)
+```
+
+Setelah import, private key tidak bisa di-export dari KMS.
+
+### Langkah 5 — Verifikasi key aktif
+
+```bash
+aws kms describe-key \
+  --key-id <KeyId> \
+  --region ap-southeast-1 \
+  --query 'KeyMetadata.{Status:KeyState,Origin:Origin,Usage:KeyUsage}'
+```
+
+Output harus:
+
+```text
+{
+  "Status": "Enabled",
+  "Origin": "EXTERNAL",
+  "Usage": "SIGN_VERIFY"
+}
+```
+
+### Langkah 6 — Test signing
+
+```bash
+# Buat digest SHA-256 dari random data
+openssl rand 32 > /tmp/test-digest.bin
+
+# Sign dengan KMS
+aws kms sign \
+  --key-id <KeyId> \
+  --message fileb:///tmp/test-digest.bin \
+  --message-type DIGEST \
+  --signing-algorithm RSASSA_PKCS1_V1_5_SHA_256 \
+  --region ap-southeast-1 \
+  --output text \
+  --query Signature \
+  | base64 --decode > /tmp/test-sig.bin
+
+# Verify dengan public key dari signing.crt
+openssl x509 -in certs/msign/signing.crt -pubkey -noout > /tmp/kms-pubkey.pem
+openssl dgst \
+  -sha256 \
+  -verify /tmp/kms-pubkey.pem \
+  -signature /tmp/test-sig.bin \
+  /tmp/test-digest.bin
+```
+
+Output harus:
+
+```text
+Verified OK
+```
+
+Jika gagal, modulus key yang di-import tidak match dengan `signing.crt`.
+
+---
+
+## 19.5 IAM Policy untuk Service
+
+Buat IAM policy agar `hash-signing-service` bisa memanggil KMS Sign:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "kms:Sign",
+        "kms:DescribeKey"
+      ],
+      "Resource": "arn:aws:kms:ap-southeast-1:<account-id>:key/<KeyId>"
+    }
+  ]
+}
+```
+
+Attach ke IAM role EC2/ECS tempat service berjalan.
+Jangan pakai access key hardcoded — gunakan IAM role.
+
+---
+
+## 19.6 Konfigurasi hash-signing-service
+
+Update `.env`:
+
+```dotenv
+SIGNER_BACKEND=awskms
+
+CERT_FILE=certs/msign/signing.crt
+CERT_SUB_CA_FILE=certs/msign/sub-ca.crt
+CERT_ROOT_CA_FILE=certs/msign/root-ca.crt
+
+AWS_KMS_REGION=ap-southeast-1
+AWS_KMS_KEY_ID=arn:aws:kms:ap-southeast-1:<account-id>:key/<KeyId>
+```
+
+`CERT_KEY_FILE` tidak dipakai saat `SIGNER_BACKEND=awskms`.
+
+Credentials AWS diambil dari standard chain secara otomatis:
+
+```text
+1. Environment: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY
+2. ~/.aws/credentials
+3. IAM Role (EC2 instance profile / ECS task role) ← recommended production
+```
+
+---
+
+## 19.7 Perbedaan Teknis KMS vs PKCS#11
+
+```text
+PKCS#11 (HSMSigner):
+  - Input: raw hash bytes
+  - DigestInfo prepend: manual di hsm_signer.go (required CKM_RSA_PKCS)
+  - Output: raw RSA signature bytes
+
+AWS KMS (KMSSigner):
+  - Input: raw hash bytes (MessageType=DIGEST)
+  - DigestInfo prepend: dilakukan KMS secara internal
+  - Output: raw RSA signature bytes
+```
+
+Karena itu `kms_signer.go` TIDAK prepend DigestInfo, berbeda dengan `hsm_signer.go`.
+
+---
+
+## 19.8 Checklist Sukses AWS KMS
+
+```text
+[x] KMS key dibuat dengan key-spec RSA_2048, key-usage SIGN_VERIFY
+[x] Key status Enabled
+[x] Test signing Verified OK terhadap signing.crt
+[x] IAM policy kms:Sign dan kms:DescribeKey terpasang di role service
+[x] SIGNER_BACKEND=awskms di .env
+[x] AWS_KMS_REGION dan AWS_KMS_KEY_ID terisi
+[x] Service restart setelah env berubah
+[x] PDF signing end-to-end valid di Adobe
+```

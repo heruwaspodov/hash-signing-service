@@ -18,10 +18,12 @@ type Config struct {
 	CertPath       services.PathCertificateService
 	Certificate    services.CertificateService
 
-	// SignerBackend selects the signing backend: "file" (default) or "pkcs11".
+	// SignerBackend selects the signing backend: "file" (default), "pkcs11", or "awskms".
 	SignerBackend string
 	// HSM holds connection config for the PKCS#11 backend.
-	HSM    HSMConfig
+	HSM HSMConfig
+	// KMS holds connection config for the AWS KMS backend.
+	KMS KMSConfig
 	// Signer is the initialized signing backend, set by main after startup.
 	Signer services.Signer
 }
@@ -34,6 +36,13 @@ type HSMConfig struct {
 	PIN        string // user PIN
 	KeyLabel   string // CKA_LABEL of the private key object
 	KeyID      string // CKA_ID of the private key (hex string, e.g. "01"); used alongside KeyLabel to avoid duplicate-label ambiguity
+}
+
+// KMSConfig holds AWS KMS connection parameters.
+// Used when SIGNER_BACKEND=awskms.
+type KMSConfig struct {
+	Region string // AWS region, e.g. "ap-southeast-1"
+	KeyID  string // KMS key ID or ARN
 }
 
 func New() *Config {
@@ -58,6 +67,10 @@ func New() *Config {
 			PIN:        getEnv("HSM_PIN", ""),
 			KeyLabel:   getEnv("HSM_KEY_LABEL", ""),
 			KeyID:      getEnv("HSM_KEY_ID", ""),
+		},
+		KMS: KMSConfig{
+			Region: getEnv("AWS_KMS_REGION", "ap-southeast-1"),
+			KeyID:  getEnv("AWS_KMS_KEY_ID", ""),
 		},
 	}
 }

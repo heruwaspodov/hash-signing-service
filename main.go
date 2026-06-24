@@ -46,6 +46,14 @@ func main() {
 		log.Printf("Signer backend: pkcs11 (module: %s, token: %s, key: %s)",
 			cfg.HSM.ModulePath, cfg.HSM.TokenLabel, cfg.HSM.KeyLabel)
 
+	case "awskms":
+		kmsSigner, err := services.NewKMSSigner(cfg.KMS.Region, cfg.KMS.KeyID)
+		if err != nil {
+			log.Fatalf("init KMS signer: %v", err)
+		}
+		cfg.Signer = kmsSigner
+		log.Printf("Signer backend: awskms (region: %s, key: %s)", cfg.KMS.Region, cfg.KMS.KeyID)
+
 	default: // "file"
 		key, err := initKeyFile(basePath, cfg)
 		if err != nil {

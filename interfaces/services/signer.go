@@ -1,12 +1,15 @@
 package services
 
-import "crypto"
+import (
+	"context"
+	"crypto"
+)
 
 // Signer is the backend-agnostic interface for RSA signing.
-// Implementations: FileSigner (PEM key on disk), HSMSigner (PKCS#11 hardware/software HSM).
+// Implementations: FileSigner, HSMSigner, and KMSSigner.
 // Switch between them via SIGNER_BACKEND env — handler and service layer are unaffected.
 type Signer interface {
-	Sign(hashBytes []byte, hashAlgoOID string) ([]byte, error)
+	Sign(ctx context.Context, hashBytes []byte, hashAlgoOID string) ([]byte, error)
 }
 
 // HashAlgoOIDMap maps digest algorithm OIDs to Go crypto.Hash values.
@@ -15,6 +18,13 @@ var HashAlgoOIDMap = map[string]crypto.Hash{
 	"2.16.840.1.101.3.4.2.1": crypto.SHA256, // SHA-256
 	"2.16.840.1.101.3.4.2.2": crypto.SHA384, // SHA-384
 	"2.16.840.1.101.3.4.2.3": crypto.SHA512, // SHA-512
+}
+
+// SignAlgoForHashOID maps digest algorithm OIDs to compatible RSA signature OIDs.
+var SignAlgoForHashOID = map[string]string{
+	"2.16.840.1.101.3.4.2.1": "1.2.840.113549.1.1.11", // sha256WithRSAEncryption
+	"2.16.840.1.101.3.4.2.2": "1.2.840.113549.1.1.12", // sha384WithRSAEncryption
+	"2.16.840.1.101.3.4.2.3": "1.2.840.113549.1.1.13", // sha512WithRSAEncryption
 }
 
 // expectedHashLen maps digest OIDs to the required digest byte length.

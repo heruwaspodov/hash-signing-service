@@ -1396,7 +1396,6 @@ Contoh `.env`:
 SIGNER_BACKEND=pkcs11
 
 CERT_FILE=certs/msign/signing.crt
-CERT_KEY_FILE=certs/msign/private.pem
 CERT_SUB_CA_FILE=certs/msign/sub-ca.crt
 CERT_ROOT_CA_FILE=certs/msign/root-ca.crt
 
@@ -1406,6 +1405,9 @@ HSM_PIN=app_pdf_signer:<CU_PASSWORD>
 HSM_KEY_LABEL=msign-key
 HSM_KEY_ID=01
 ```
+
+`CERT_KEY_FILE` tidak dipakai saat `SIGNER_BACKEND=pkcs11`; private key
+diambil dari HSM berdasarkan `HSM_KEY_LABEL` dan `HSM_KEY_ID`.
 
 Untuk production:
 
@@ -1483,6 +1485,7 @@ Cek berurutan:
 4. Certificate belum expired.
 5. Input ke hash-signing-service adalah digest, bukan raw PDF bytes.
 6. hash_algo OID sesuai panjang digest.
+7. sign_algo OID wajib ada dan cocok dengan hash_algo.
 ```
 
 OID yang didukung service:
@@ -1491,6 +1494,14 @@ OID yang didukung service:
 SHA-256: 2.16.840.1.101.3.4.2.1 -> 32 byte digest
 SHA-384: 2.16.840.1.101.3.4.2.2 -> 48 byte digest
 SHA-512: 2.16.840.1.101.3.4.2.3 -> 64 byte digest
+```
+
+Pasangan `sign_algo` yang diterima service:
+
+```text
+SHA-256 -> 1.2.840.113549.1.1.11 (sha256WithRSAEncryption)
+SHA-384 -> 1.2.840.113549.1.1.12 (sha384WithRSAEncryption)
+SHA-512 -> 1.2.840.113549.1.1.13 (sha512WithRSAEncryption)
 ```
 
 ---
@@ -1884,7 +1895,6 @@ Untuk local/dev SoftHSM:
 SIGNER_BACKEND=pkcs11
 
 CERT_FILE=certs/msign/signing.crt
-CERT_KEY_FILE=certs/msign/private.pem
 CERT_SUB_CA_FILE=certs/msign/sub-ca.crt
 CERT_ROOT_CA_FILE=certs/msign/root-ca.crt
 
@@ -1901,7 +1911,6 @@ Untuk AWS CloudHSM:
 SIGNER_BACKEND=pkcs11
 
 CERT_FILE=certs/msign/signing.crt
-CERT_KEY_FILE=certs/msign/private.pem
 CERT_SUB_CA_FILE=certs/msign/sub-ca.crt
 CERT_ROOT_CA_FILE=certs/msign/root-ca.crt
 
@@ -1911,6 +1920,9 @@ HSM_PIN=<CU_USER>:<CU_PASSWORD>
 HSM_KEY_LABEL=msign-key
 HSM_KEY_ID=01
 ```
+
+`CERT_KEY_FILE` tidak dipakai untuk backend `pkcs11`. Service hanya memuat
+certificate chain dari file, sedangkan operasi private key dilakukan di HSM.
 
 Perbedaan penting:
 
@@ -2138,7 +2150,7 @@ Setelah import, private key tidak bisa di-export dari KMS.
 aws kms describe-key \
   --key-id <KeyId> \
   --region ap-southeast-1 \
-  --query 'KeyMetadata.{Status:KeyState,Origin:Origin,Usage:KeyUsage}'
+  --query 'KeyMetadata.{Status:KeyState,Origin:Origin,Usage:KeyUsage,Spec:KeySpec,Algorithms:SigningAlgorithms}'
 ```
 
 Output harus:
@@ -2147,7 +2159,13 @@ Output harus:
 {
   "Status": "Enabled",
   "Origin": "EXTERNAL",
-  "Usage": "SIGN_VERIFY"
+  "Usage": "SIGN_VERIFY",
+  "Spec": "RSA_2048",
+  "Algorithms": [
+    "RSASSA_PKCS1_V1_5_SHA_256",
+    "RSASSA_PKCS1_V1_5_SHA_384",
+    "RSASSA_PKCS1_V1_5_SHA_512"
+  ]
 }
 ```
 
@@ -2210,6 +2228,10 @@ Buat IAM policy agar `hash-signing-service` bisa memanggil KMS Sign:
 Attach ke IAM role EC2/ECS tempat service berjalan.
 Jangan pakai access key hardcoded — gunakan IAM role.
 
+`kms:DescribeKey` dipakai saat startup untuk menolak key yang tidak enabled,
+bukan RSA signing key, bukan `SIGN_VERIFY`, atau tidak mengizinkan algoritma
+`RSASSA_PKCS1_V1_5_SHA_256`.
+
 ---
 
 ## 19.6 Konfigurasi hash-signing-service
@@ -2228,6 +2250,9 @@ AWS_KMS_KEY_ID=arn:aws:kms:ap-southeast-1:<account-id>:key/<KeyId>
 ```
 
 `CERT_KEY_FILE` tidak dipakai saat `SIGNER_BACKEND=awskms`.
+`SIGNER_BACKEND` dinormalisasi dengan trim/lowercase. Value selain `file`,
+`pkcs11`, dan `awskms` akan menggagalkan startup; service tidak lagi fallback
+diam-diam ke file signer.
 
 Credentials AWS diambil dari standard chain secara otomatis:
 
@@ -2251,6 +2276,8 @@ AWS KMS (KMSSigner):
   - Input: raw hash bytes (MessageType=DIGEST)
   - DigestInfo prepend: dilakukan KMS secara internal
   - Output: raw RSA signature bytes
+  - Startup validation: KeyState Enabled, KeyUsage SIGN_VERIFY, KeySpec RSA_2048/RSA_3072/RSA_4096,
+    SigningAlgorithms minimal berisi RSASSA_PKCS1_V1_5_SHA_256
 ```
 
 Karena itu `kms_signer.go` TIDAK prepend DigestInfo, berbeda dengan `hsm_signer.go`.
@@ -2262,10 +2289,12 @@ Karena itu `kms_signer.go` TIDAK prepend DigestInfo, berbeda dengan `hsm_signer.
 ```text
 [x] KMS key dibuat dengan key-spec RSA_2048, key-usage SIGN_VERIFY
 [x] Key status Enabled
+[x] SigningAlgorithms mengizinkan RSASSA_PKCS1_V1_5_SHA_256
 [x] Test signing Verified OK terhadap signing.crt
 [x] IAM policy kms:Sign dan kms:DescribeKey terpasang di role service
 [x] SIGNER_BACKEND=awskms di .env
 [x] AWS_KMS_REGION dan AWS_KMS_KEY_ID terisi
+[x] Request /api/v1/hash-sign mengirim sign_algo yang cocok dengan hash_algo
 [x] Service restart setelah env berubah
 [x] PDF signing end-to-end valid di Adobe
 ```

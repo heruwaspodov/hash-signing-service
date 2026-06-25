@@ -133,6 +133,39 @@ func TestHashSign_MissingHashAlgo_Returns400(t *testing.T) {
 	assertErrorCode(t, w, "bad_request")
 }
 
+func TestHashSign_MissingSignAlgo_Returns400(t *testing.T) {
+	cfg := newTestConfig(t)
+	r := makeRequest(t, map[string]any{
+		"hash":      []string{digestB64("x")},
+		"hash_algo": "2.16.840.1.101.3.4.2.1",
+	}, cfg)
+	w := httptest.NewRecorder()
+
+	handlers.HashSign(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+	assertErrorCode(t, w, "bad_request")
+}
+
+func TestHashSign_MismatchedSignAlgo_Returns400(t *testing.T) {
+	cfg := newTestConfig(t)
+	r := makeRequest(t, map[string]any{
+		"hash":      []string{digestB64("x")},
+		"hash_algo": "2.16.840.1.101.3.4.2.1",
+		"sign_algo": "1.2.840.113549.1.1.13",
+	}, cfg)
+	w := httptest.NewRecorder()
+
+	handlers.HashSign(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+	assertErrorCode(t, w, "bad_request")
+}
+
 func TestHashSign_EmptyHashElement_Returns400(t *testing.T) {
 	cfg := newTestConfig(t)
 	r := makeRequest(t, map[string]any{

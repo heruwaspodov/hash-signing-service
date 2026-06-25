@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -29,39 +30,11 @@ func main() {
 	}
 
 	// Init Signer — backend selected by SIGNER_BACKEND env.
-	switch cfg.SignerBackend {
-	case "pkcs11":
-		hsmSigner, err := services.NewHSMSigner(
-			cfg.HSM.ModulePath,
-			cfg.HSM.TokenLabel,
-			cfg.HSM.PIN,
-			cfg.HSM.KeyLabel,
-			cfg.HSM.KeyID,
-		)
-		if err != nil {
-			log.Fatalf("init HSM signer: %v", err)
-		}
+	if err := initSigner(basePath, cfg); err != nil {
+		log.Fatal(err)
+	}
+	if hsmSigner, ok := cfg.Signer.(*services.HSMSigner); ok {
 		defer hsmSigner.Close()
-		cfg.Signer = hsmSigner
-		log.Printf("Signer backend: pkcs11 (module: %s, token: %s, key: %s)",
-			cfg.HSM.ModulePath, cfg.HSM.TokenLabel, cfg.HSM.KeyLabel)
-
-	case "awskms":
-		kmsSigner, err := services.NewKMSSigner(cfg.KMS.Region, cfg.KMS.KeyID)
-		if err != nil {
-			log.Fatalf("init KMS signer: %v", err)
-		}
-		cfg.Signer = kmsSigner
-		log.Printf("Signer backend: awskms (region: %s, key: %s)", cfg.KMS.Region, cfg.KMS.KeyID)
-
-	default: // "file"
-		key, err := initKeyFile(basePath, cfg)
-		if err != nil {
-			log.Fatalf("Error loading private key: %v", err)
-		}
-		cfg.Certificate.Key = key
-		cfg.Signer = services.NewFileSigner(key)
-		log.Printf("Signer backend: file (key: %s)", cfg.CertPath.AppKey)
 	}
 
 	// Load certificate chain (used by msign-backend for CMS embedding reference).
@@ -94,6 +67,48 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatal("Error starting the server: ", err)
+	}
+}
+
+func initSigner(basePath string, cfg *config.Config) error {
+	switch cfg.SignerBackend {
+	case "file":
+		key, err := initKeyFile(basePath, cfg)
+		if err != nil {
+			return err
+		}
+		cfg.Certificate.Key = key
+		cfg.Signer = services.NewFileSigner(key)
+		log.Print("Signer backend: file")
+		return nil
+
+	case "pkcs11":
+		hsmSigner, err := services.NewHSMSigner(
+			cfg.HSM.ModulePath,
+			cfg.HSM.TokenLabel,
+			cfg.HSM.PIN,
+			cfg.HSM.KeyLabel,
+			cfg.HSM.KeyID,
+		)
+		if err != nil {
+			return err
+		}
+		cfg.Signer = hsmSigner
+		log.Printf("Signer backend: pkcs11 (module: %s, token: %s, key: %s)",
+			cfg.HSM.ModulePath, cfg.HSM.TokenLabel, cfg.HSM.KeyLabel)
+		return nil
+
+	case "awskms":
+		kmsSigner, err := services.NewKMSSigner(cfg.KMS.Region, cfg.KMS.KeyID)
+		if err != nil {
+			return err
+		}
+		cfg.Signer = kmsSigner
+		log.Printf("Signer backend: awskms (region: %s, key: %s)", cfg.KMS.Region, cfg.KMS.KeyID)
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported SIGNER_BACKEND=%q; supported values: file, pkcs11, awskms", cfg.SignerBackend)
 	}
 }
 

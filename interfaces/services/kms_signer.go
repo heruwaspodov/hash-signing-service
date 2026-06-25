@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -15,13 +18,30 @@ import (
 // unlike HSMSigner (CKM_RSA_PKCS), do NOT prepend DigestInfo before calling Sign.
 // SIGNER_BACKEND=awskms.
 type KMSSigner struct {
-	client *kms.Client
+	client kmsAPI
 	keyID  string
+}
+
+type kmsAPI interface {
+	DescribeKey(context.Context, *kms.DescribeKeyInput, ...func(*kms.Options)) (*kms.DescribeKeyOutput, error)
+	Sign(context.Context, *kms.SignInput, ...func(*kms.Options)) (*kms.SignOutput, error)
 }
 
 // NewKMSSigner initializes an AWS KMS client and validates the key exists.
 func NewKMSSigner(region, keyID string) (*KMSSigner, error) {
-	cfg, err := config.LoadDefaultConfig(context.Background(),
+	region = strings.TrimSpace(region)
+	keyID = strings.TrimSpace(keyID)
+	if region == "" {
+		return nil, errors.New("AWS_KMS_REGION is required")
+	}
+	if keyID == "" {
+		return nil, errors.New("AWS_KMS_KEY_ID is required when SIGNER_BACKEND=awskms")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
 	)
 	if err != nil {
@@ -30,25 +50,26 @@ func NewKMSSigner(region, keyID string) (*KMSSigner, error) {
 
 	client := kms.NewFromConfig(cfg)
 
-	// Verify key is accessible at startup.
-	if _, err := client.DescribeKey(context.Background(), &kms.DescribeKeyInput{
-		KeyId: aws.String(keyID),
-	}); err != nil {
-		return nil, fmt.Errorf("kms describe key %q: %v", keyID, err)
+	if err := validateKMSKey(ctx, client, keyID); err != nil {
+		return nil, err
 	}
 
 	return &KMSSigner{client: client, keyID: keyID}, nil
 }
 
+func newKMSSignerWithClient(client kmsAPI, keyID string) *KMSSigner {
+	return &KMSSigner{client: client, keyID: keyID}
+}
+
 // Sign calls KMS Sign with MessageType=DIGEST — passes raw hash bytes,
 // KMS handles PKCS#1 v1.5 DigestInfo wrapping internally.
-func (k *KMSSigner) Sign(hashBytes []byte, hashAlgoOID string) ([]byte, error) {
+func (k *KMSSigner) Sign(ctx context.Context, hashBytes []byte, hashAlgoOID string) ([]byte, error) {
 	algo, ok := kmsAlgoMap[hashAlgoOID]
 	if !ok {
 		return nil, fmt.Errorf("unsupported hash_algo OID: %s", hashAlgoOID)
 	}
 
-	out, err := k.client.Sign(context.Background(), &kms.SignInput{
+	out, err := k.client.Sign(ctx, &kms.SignInput{
 		KeyId:            aws.String(k.keyID),
 		Message:          hashBytes,
 		MessageType:      types.MessageTypeDigest,
@@ -59,6 +80,47 @@ func (k *KMSSigner) Sign(hashBytes []byte, hashAlgoOID string) ([]byte, error) {
 	}
 
 	return out.Signature, nil
+}
+
+func validateKMSKey(ctx context.Context, client kmsAPI, keyID string) error {
+	out, err := client.DescribeKey(ctx, &kms.DescribeKeyInput{
+		KeyId: aws.String(keyID),
+	})
+	if err != nil {
+		return fmt.Errorf("kms describe key %q: %v", keyID, err)
+	}
+	if out.KeyMetadata == nil {
+		return fmt.Errorf("kms describe key %q: missing key metadata", keyID)
+	}
+
+	metadata := out.KeyMetadata
+	if metadata.KeyState != types.KeyStateEnabled {
+		return fmt.Errorf("KMS key %q is not enabled: %s", keyID, metadata.KeyState)
+	}
+	if metadata.KeyUsage != types.KeyUsageTypeSignVerify {
+		return fmt.Errorf("KMS key %q must have KeyUsage=SIGN_VERIFY", keyID)
+	}
+
+	switch metadata.KeySpec {
+	case types.KeySpecRsa2048, types.KeySpecRsa3072, types.KeySpecRsa4096:
+	default:
+		return fmt.Errorf("KMS key %q must be an RSA signing key; got %s", keyID, metadata.KeySpec)
+	}
+
+	if !containsSigningAlgorithm(metadata.SigningAlgorithms, types.SigningAlgorithmSpecRsassaPkcs1V15Sha256) {
+		return fmt.Errorf("KMS key %q does not allow RSASSA_PKCS1_V1_5_SHA_256", keyID)
+	}
+
+	return nil
+}
+
+func containsSigningAlgorithm(algos []types.SigningAlgorithmSpec, want types.SigningAlgorithmSpec) bool {
+	for _, algo := range algos {
+		if algo == want {
+			return true
+		}
+	}
+	return false
 }
 
 // kmsAlgoMap maps digest OIDs to KMS RSASSA_PKCS1_V1_5 algorithm specs.

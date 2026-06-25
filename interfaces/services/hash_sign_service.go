@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -41,8 +42,8 @@ func NewRawHashSignService(hashB64 string, hashAlgoOID string, signer Signer) (*
 
 // Call delegates to the configured Signer backend and returns the
 // base64-encoded signature. The digest is passed as-is — no re-hashing.
-func (s *RawHashSignService) Call() (string, error) {
-	sigBytes, err := s.signer.Sign(s.hashBytes, s.hashAlgoOID)
+func (s *RawHashSignService) Call(ctx context.Context) (string, error) {
+	sigBytes, err := s.signer.Sign(ctx, s.hashBytes, s.hashAlgoOID)
 	if err != nil {
 		return "", fmt.Errorf("signing failed: %v", err)
 	}

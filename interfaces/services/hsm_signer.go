@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -125,7 +126,10 @@ func NewHSMSigner(modulePath, tokenLabel, pin, keyLabel, keyID string) (*HSMSign
 // performs a raw RSA operation. The ASN.1 DigestInfo prefix is prepended manually
 // before calling C_Sign — required for the output to match rsa.SignPKCS1v15 and
 // be accepted by PDF validators (Adobe, iText, etc.).
-func (h *HSMSigner) Sign(hashBytes []byte, hashAlgoOID string) ([]byte, error) {
+func (h *HSMSigner) Sign(ctx context.Context, hashBytes []byte, hashAlgoOID string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	prefix, ok := digestInfoPrefix[hashAlgoOID]
 	if !ok {
 		return nil, fmt.Errorf("unsupported hash_algo OID: %s", hashAlgoOID)

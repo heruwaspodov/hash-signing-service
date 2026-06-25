@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
@@ -20,7 +21,10 @@ func NewFileSigner(key *rsa.PrivateKey) *FileSigner {
 // Sign performs RSA PKCS#1 v1.5 signing using the in-memory private key.
 // hashBytes are raw digest bytes — not re-hashed inside this method.
 // Go's rsa.SignPKCS1v15 automatically prepends the DigestInfo ASN.1 prefix.
-func (f *FileSigner) Sign(hashBytes []byte, hashAlgoOID string) ([]byte, error) {
+func (f *FileSigner) Sign(ctx context.Context, hashBytes []byte, hashAlgoOID string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	hashFunc, ok := HashAlgoOIDMap[hashAlgoOID]
 	if !ok {
 		return nil, fmt.Errorf("unsupported hash_algo: %s", hashAlgoOID)

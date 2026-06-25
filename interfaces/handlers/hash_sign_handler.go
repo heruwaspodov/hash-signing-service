@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"hash-signing-service/config"
 	"hash-signing-service/interfaces/services"
@@ -36,8 +38,14 @@ func HashSign(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	if len(req.Hash) == 0 || req.HashAlgo == "" {
+	if len(req.Hash) == 0 || req.HashAlgo == "" || req.SignAlgo == "" {
 		renderHashSignError(w, http.StatusBadRequest, "bad_request", "missing required params")
+		return
+	}
+
+	expectedSignAlgo, ok := services.SignAlgoForHashOID[req.HashAlgo]
+	if !ok || req.SignAlgo != expectedSignAlgo {
+		renderHashSignError(w, http.StatusBadRequest, "bad_request", "sign_algo does not match hash_algo or is unsupported")
 		return
 	}
 
@@ -61,7 +69,9 @@ func HashSign(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		signature, err := svc.Call()
+		signCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		signature, err := svc.Call(signCtx)
+		cancel()
 		if err != nil {
 			log.Printf("HashSign error at index %d: %v", i, err)
 			renderHashSignError(w, http.StatusInternalServerError, "internal_error", "signing failed")

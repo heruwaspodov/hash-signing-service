@@ -4,6 +4,7 @@ import (
 	"hash-signing-service/interfaces/services"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config represent config keys.
@@ -60,7 +61,7 @@ func New() *Config {
 			AppSubCA:  getEnv("CERT_SUB_CA_FILE", "certs/sub-ca.crt"),
 			AppRootCA: getEnv("CERT_ROOT_CA_FILE", "certs/root-ca.crt"),
 		},
-		SignerBackend: getEnv("SIGNER_BACKEND", "file"),
+		SignerBackend: strings.ToLower(strings.TrimSpace(getEnv("SIGNER_BACKEND", "file"))),
 		HSM: HSMConfig{
 			ModulePath: getEnv("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so"),
 			TokenLabel: getEnv("HSM_TOKEN_LABEL", ""),

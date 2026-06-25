@@ -10,7 +10,7 @@ This service is designed to be called by a backend orchestrator (e.g. `msign-bac
 
 | Layer | Technology |
 |---|---|
-| Language | Go 1.21.5 |
+| Language | Go 1.24 |
 | HTTP Router | [gorilla/mux](https://github.com/gorilla/mux) v1.8.1 |
 | Config | [joho/godotenv](https://github.com/joho/godotenv) v1.5.1 |
 | Cryptography | Go stdlib (`crypto/rsa`, `crypto/x509`, `encoding/pem`) |
@@ -19,7 +19,7 @@ This service is designed to be called by a backend orchestrator (e.g. `msign-bac
 
 ## Prerequisites
 
-- Go 1.21.5+
+- Go 1.24+
 - RSA private key + certificate chain in PEM format (signing key, signing cert, sub-CA, root-CA)
 
 ---
@@ -118,6 +118,8 @@ Content-Type: application/json
 | `hash_algo` | `2.16.840.1.101.3.4.2.2` | SHA-384 |
 | `hash_algo` | `2.16.840.1.101.3.4.2.3` | SHA-512 |
 | `sign_algo` | `1.2.840.113549.1.1.11` | sha256WithRSAEncryption |
+| `sign_algo` | `1.2.840.113549.1.1.12` | sha384WithRSAEncryption |
+| `sign_algo` | `1.2.840.113549.1.1.13` | sha512WithRSAEncryption |
 
 **Sample Request — single hash**
 
@@ -196,19 +198,21 @@ curl -sS -X POST http://localhost:7777/api/v1/hash-sign \
 
 ## Signer Backend
 
-The service supports two signing backends, switchable via `SIGNER_BACKEND` env — no code changes required.
+The service supports three signing backends, switchable via `SIGNER_BACKEND` env — no code changes required.
 
 | `SIGNER_BACKEND` | Backend | When to use |
 |---|---|---|
 | `file` (default) | PEM private key from disk | Local development, CI |
 | `pkcs11` | PKCS#11 HSM (SoftHSM2 / CloudHSM) | Staging, production |
+| `awskms` | AWS KMS Sign API | AWS KMS in staging/production, LocalStack for local integration |
 
 ### Architecture
 
 ```
 handler → RawHashSignService → Signer interface
                                     ├── FileSigner   (SIGNER_BACKEND=file)
-                                    └── HSMSigner    (SIGNER_BACKEND=pkcs11)
+                                    ├── HSMSigner    (SIGNER_BACKEND=pkcs11)
+                                    └── KMSSigner    (SIGNER_BACKEND=awskms)
 ```
 
 Swapping backends only requires changing env vars — handler and service layer are unaffected.
@@ -289,6 +293,25 @@ pkcs11-tool --module /usr/lib/softhsm/libsofthsm2.so \
 **Production note — session pool:**
 
 The current implementation uses a single PKCS#11 session protected by a mutex. This serializes all signing requests, which is fine for dev and low-traffic use. For high-throughput production, replace the mutex with a session pool (one session per goroutine up to a configurable max).
+
+---
+
+### SIGNER_BACKEND=awskms
+
+Uses AWS KMS `Sign` with `MessageType=DIGEST` and RSA PKCS#1 v1.5 SHA-256/384/512 algorithms. The private key is never loaded from `CERT_KEY_FILE`; only the public certificate chain is loaded by the service.
+
+```dotenv
+SIGNER_BACKEND=awskms
+AWS_KMS_REGION=ap-southeast-1
+AWS_KMS_KEY_ID=alias/msign-local-signing
+
+# LocalStack/local integration only. Do not set AWS_ENDPOINT_URL_KMS in AWS staging/production.
+AWS_ACCESS_KEY_ID=test
+AWS_SECRET_ACCESS_KEY=test
+AWS_ENDPOINT_URL_KMS=http://localhost:4566
+```
+
+The public key in `CERT_FILE` must match the private key held by AWS KMS for real PDF/CMS trust validation. LocalStack KMS can validate API integration, but it does not prove Adobe/GlobalSign trust or AWS KMS custody/compliance.
 
 ---
 

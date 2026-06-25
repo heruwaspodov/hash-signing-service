@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -84,7 +85,7 @@ func TestCall_SHA256_SignatureVerifies(t *testing.T) {
 		t.Fatalf("NewRawHashSignService: %v", err)
 	}
 
-	sigB64, err := svc.Call()
+	sigB64, err := svc.Call(context.Background())
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestCall_SHA512_SignatureVerifies(t *testing.T) {
 		t.Fatalf("NewRawHashSignService: %v", err)
 	}
 
-	sigB64, err := svc.Call()
+	sigB64, err := svc.Call(context.Background())
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -136,8 +137,8 @@ func TestCall_DifferentInputsProduceDifferentSignatures(t *testing.T) {
 	svc1, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d1[:]), "2.16.840.1.101.3.4.2.1", signer)
 	svc2, _ := services.NewRawHashSignService(base64.StdEncoding.EncodeToString(d2[:]), "2.16.840.1.101.3.4.2.1", signer)
 
-	sig1, _ := svc1.Call()
-	sig2, _ := svc2.Call()
+	sig1, _ := svc1.Call(context.Background())
+	sig2, _ := svc2.Call(context.Background())
 
 	if sig1 == sig2 {
 		t.Fatal("expected different signatures for different inputs")
@@ -151,7 +152,7 @@ func TestCall_DoesNotReHash(t *testing.T) {
 	hashB64 := base64.StdEncoding.EncodeToString(digest[:])
 
 	svc, _ := services.NewRawHashSignService(hashB64, "2.16.840.1.101.3.4.2.1", signer)
-	sigB64, _ := svc.Call()
+	sigB64, _ := svc.Call(context.Background())
 	sigBytes, _ := base64.StdEncoding.DecodeString(sigB64)
 
 	// Must verify with the original digest — NOT sha256(digest).

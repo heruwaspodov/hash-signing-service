@@ -1,0 +1,4 @@
+[submodule "certs"]
+	path = certs
+	url = https://github.com/heruwaspodov/hash-signing-service-certs.git
+	branch = main

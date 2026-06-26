@@ -48,7 +48,8 @@ func TestKMSSignerSign_UsesDigestMessageTypeAndRawDigest(t *testing.T) {
 	client := &fakeKMSClient{
 		signOut: &kms.SignOutput{Signature: []byte("signature")},
 	}
-	signer := newKMSSignerWithClient(client, "alias/test")
+	provider := newAWSKMSProviderWithClient(client)
+	signer := NewKMSSigner(provider, "alias/test", 0)
 	digest := bytes.Repeat([]byte{0xab}, 32)
 
 	sig, err := signer.Sign(context.Background(), digest, "2.16.840.1.101.3.4.2.1")
@@ -82,7 +83,8 @@ func TestKMSSignerSign_MapsSHA384AndSHA512(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &fakeKMSClient{signOut: &kms.SignOutput{Signature: []byte("ok")}}
-			signer := newKMSSignerWithClient(client, "alias/test")
+			provider := newAWSKMSProviderWithClient(client)
+			signer := NewKMSSigner(provider, "alias/test", 0)
 
 			if _, err := signer.Sign(context.Background(), []byte("digest"), tt.oid); err != nil {
 				t.Fatalf("Sign: %v", err)
@@ -96,7 +98,8 @@ func TestKMSSignerSign_MapsSHA384AndSHA512(t *testing.T) {
 
 func TestKMSSignerSign_UnsupportedOIDDoesNotCallKMS(t *testing.T) {
 	client := &fakeKMSClient{}
-	signer := newKMSSignerWithClient(client, "alias/test")
+	provider := newAWSKMSProviderWithClient(client)
+	signer := NewKMSSigner(provider, "alias/test", 0)
 
 	if _, err := signer.Sign(context.Background(), []byte("digest"), "9.9.9.9"); err == nil {
 		t.Fatal("expected unsupported OID error")
@@ -108,7 +111,8 @@ func TestKMSSignerSign_UnsupportedOIDDoesNotCallKMS(t *testing.T) {
 
 func TestKMSSignerSign_ReturnsKMSError(t *testing.T) {
 	client := &fakeKMSClient{signErr: errors.New("boom")}
-	signer := newKMSSignerWithClient(client, "alias/test")
+	provider := newAWSKMSProviderWithClient(client)
+	signer := NewKMSSigner(provider, "alias/test", 0)
 
 	if _, err := signer.Sign(context.Background(), []byte("digest"), "2.16.840.1.101.3.4.2.1"); err == nil {
 		t.Fatal("expected KMS error")
@@ -118,8 +122,8 @@ func TestKMSSignerSign_ReturnsKMSError(t *testing.T) {
 func TestValidateKMSKey_AcceptsValidMetadata(t *testing.T) {
 	client := &fakeKMSClient{describeOut: validKMSMetadata()}
 
-	if err := validateKMSKey(context.Background(), client, "alias/test"); err != nil {
-		t.Fatalf("validateKMSKey: %v", err)
+	if err := validateAWSKMSKey(context.Background(), client, "alias/test"); err != nil {
+		t.Fatalf("validateAWSKMSKey: %v", err)
 	}
 }
 
@@ -142,18 +146,18 @@ func TestValidateKMSKey_RejectsInvalidMetadata(t *testing.T) {
 			tt.mutate(out.KeyMetadata)
 			client := &fakeKMSClient{describeOut: out}
 
-			if err := validateKMSKey(context.Background(), client, "alias/test"); err == nil {
+			if err := validateAWSKMSKey(context.Background(), client, "alias/test"); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
 	}
 }
 
-func TestNewKMSSigner_RejectsBlankInputs(t *testing.T) {
-	if _, err := NewKMSSigner("", "alias/test"); err == nil {
+func TestNewAWSKMSProvider_RejectsBlankInputs(t *testing.T) {
+	if _, err := NewAWSKMSProvider("", "alias/test"); err == nil {
 		t.Fatal("expected blank region error")
 	}
-	if _, err := NewKMSSigner("ap-southeast-1", " "); err == nil {
+	if _, err := NewAWSKMSProvider("ap-southeast-1", " "); err == nil {
 		t.Fatal("expected blank key ID error")
 	}
 }

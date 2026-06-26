@@ -198,13 +198,13 @@ curl -sS -X POST http://localhost:7777/api/v1/hash-sign \
 
 ## Signer Backend
 
-The service supports three signing backends, switchable via `SIGNER_BACKEND` env — no code changes required.
+The service supports multiple signing backends, switchable via `SIGNER_BACKEND` env — no code changes required.
 
 | `SIGNER_BACKEND` | Backend | When to use |
 |---|---|---|
 | `file` (default) | PEM private key from disk | Local development, CI |
 | `pkcs11` | PKCS#11 HSM (SoftHSM2 / CloudHSM) | Staging, production |
-| `awskms` | AWS KMS Sign API | AWS KMS in staging/production, LocalStack for local integration |
+| `kms` | Provider-based KMS | `KMS_PROVIDER=aws` or `KMS_PROVIDER=alicloud` |
 
 ### Architecture
 
@@ -212,7 +212,9 @@ The service supports three signing backends, switchable via `SIGNER_BACKEND` env
 handler → RawHashSignService → Signer interface
                                     ├── FileSigner   (SIGNER_BACKEND=file)
                                     ├── HSMSigner    (SIGNER_BACKEND=pkcs11)
-                                    └── KMSSigner    (SIGNER_BACKEND=awskms)
+                                    └── KMSSigner    (SIGNER_BACKEND=kms)
+                                          ├── AWSKMSProvider
+                                          └── AlibabaKMSProvider
 ```
 
 Swapping backends only requires changing env vars — handler and service layer are unaffected.
@@ -296,12 +298,14 @@ The current implementation uses a single PKCS#11 session protected by a mutex. T
 
 ---
 
-### SIGNER_BACKEND=awskms
+### SIGNER_BACKEND=kms, KMS_PROVIDER=aws
 
 Uses AWS KMS `Sign` with `MessageType=DIGEST` and RSA PKCS#1 v1.5 SHA-256/384/512 algorithms. The private key is never loaded from `CERT_KEY_FILE`; only the public certificate chain is loaded by the service.
 
 ```dotenv
-SIGNER_BACKEND=awskms
+SIGNER_BACKEND=kms
+KMS_PROVIDER=aws
+KMS_TIMEOUT_SECONDS=10
 AWS_KMS_REGION=ap-southeast-1
 AWS_KMS_KEY_ID=alias/msign-local-signing
 
@@ -312,6 +316,64 @@ AWS_ENDPOINT_URL_KMS=http://localhost:4566
 ```
 
 The public key in `CERT_FILE` must match the private key held by AWS KMS for real PDF/CMS trust validation. LocalStack KMS can validate API integration, but it does not prove Adobe/GlobalSign trust or AWS KMS custody/compliance.
+
+---
+
+### SIGNER_BACKEND=kms, KMS_PROVIDER=alicloud
+
+Alibaba Cloud KMS support is provider-based. The HTTP API remains unchanged.
+
+#### Alibaba local mode
+
+Local mode is not an Alibaba KMS emulator. It exercises the Alibaba provider flow without network calls by signing with the existing `CERT_KEY_FILE`.
+
+```dotenv
+APP_ENV=local
+SIGNER_BACKEND=kms
+KMS_PROVIDER=alicloud
+KMS_TIMEOUT_SECONDS=10
+
+ALICLOUD_KMS_MODE=local
+ALICLOUD_KMS_LOCAL_SCENARIO=success
+
+CERT_FILE=certs/signing.crt
+CERT_KEY_FILE=certs/signing.key
+CERT_SUB_CA_FILE=certs/sub-ca.crt
+CERT_ROOT_CA_FILE=certs/root-ca.crt
+```
+
+Local mode is allowed only when `APP_ENV=local` or `APP_ENV=test`. It loads `CERT_KEY_FILE` once at startup and signs raw digests with RSA PKCS#1 v1.5. It does not use `CERT_FILE`, `CERT_SUB_CA_FILE`, or `CERT_ROOT_CA_FILE` for the signing operation itself; those remain loaded for the existing certificate-chain flow.
+
+Local fault injection:
+
+| `ALICLOUD_KMS_LOCAL_SCENARIO` | Behavior |
+|---|---|
+| `success` | Sign with `CERT_KEY_FILE` |
+| `key_not_found` | Return internal KMS key-not-found error |
+| `key_disabled` | Return internal KMS disabled-key error |
+| `access_denied` | Return internal access-denied error |
+| `throttled` | Return internal throttled error |
+| `timeout` | Return internal timeout error |
+| `internal_error` | Return wrapped internal KMS error |
+| `invalid_signature` | Return intentionally corrupted signature bytes for local/test validation |
+
+#### Alibaba remote mode
+
+Remote mode is intentionally fail-fast until the exact Alibaba KMS product/API contract is verified against a non-production Alibaba KMS key.
+
+```dotenv
+SIGNER_BACKEND=kms
+KMS_PROVIDER=alicloud
+ALICLOUD_KMS_MODE=remote
+
+ALICLOUD_KMS_KEY_ID=
+ALICLOUD_KMS_ENDPOINT=
+ALICLOUD_REGION_ID=
+ALICLOUD_ACCESS_KEY_ID=
+ALICLOUD_ACCESS_KEY_SECRET=
+```
+
+Before enabling remote signing, confirm the selected Alibaba KMS product and asymmetric signing API accept precomputed SHA-256/SHA-384/SHA-512 digests with RSA PKCS#1 v1.5 and return raw or decodable signature bytes. Do not send a digest to an API mode that hashes it again.
 
 ---
 

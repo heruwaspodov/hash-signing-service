@@ -98,17 +98,58 @@ func initSigner(basePath string, cfg *config.Config) error {
 			cfg.HSM.ModulePath, cfg.HSM.TokenLabel, cfg.HSM.KeyLabel)
 		return nil
 
-	case "awskms":
-		kmsSigner, err := services.NewKMSSigner(cfg.KMS.Region, cfg.KMS.KeyID)
+	case "kms":
+		kmsSigner, err := initProviderKMSSigner(basePath, cfg)
 		if err != nil {
 			return err
 		}
 		cfg.Signer = kmsSigner
-		log.Printf("Signer backend: awskms (region: %s, key: %s)", cfg.KMS.Region, cfg.KMS.KeyID)
+		log.Printf("Signer backend: kms (provider: %s)", cfg.KMS.Provider)
 		return nil
 
 	default:
-		return fmt.Errorf("unsupported SIGNER_BACKEND=%q; supported values: file, pkcs11, awskms", cfg.SignerBackend)
+		return fmt.Errorf("unsupported SIGNER_BACKEND=%q; supported values: file, pkcs11, kms", cfg.SignerBackend)
+	}
+}
+
+func initAWSKMSSigner(cfg *config.Config) (*services.KMSSigner, error) {
+	provider, err := services.NewAWSKMSProvider(cfg.KMS.AWS.Region, cfg.KMS.AWS.KeyID)
+	if err != nil {
+		return nil, err
+	}
+	return services.NewKMSSigner(provider, cfg.KMS.AWS.KeyID, cfg.KMS.Timeout), nil
+}
+
+func initProviderKMSSigner(basePath string, cfg *config.Config) (*services.KMSSigner, error) {
+	switch cfg.KMS.Provider {
+	case "aws":
+		return initAWSKMSSigner(cfg)
+
+	case "alicloud":
+		var privateKey *rsa.PrivateKey
+		if cfg.KMS.AliCloud.Mode == services.AlibabaKMSModeLocal {
+			var err error
+			privateKey, err = initKeyFile(basePath, cfg)
+			if err != nil {
+				return nil, err
+			}
+		}
+		provider, err := services.NewAlibabaKMSProvider(services.AlibabaKMSProviderConfig{
+			Mode:            cfg.KMS.AliCloud.Mode,
+			KeyID:           cfg.KMS.AliCloud.KeyID,
+			Endpoint:        cfg.KMS.AliCloud.Endpoint,
+			RegionID:        cfg.KMS.AliCloud.RegionID,
+			AccessKeyID:     cfg.KMS.AliCloud.AccessKeyID,
+			AccessKeySecret: cfg.KMS.AliCloud.AccessKeySecret,
+			LocalScenario:   cfg.KMS.AliCloud.LocalScenario,
+		}, privateKey, cfg.AppEnvironment)
+		if err != nil {
+			return nil, err
+		}
+		return services.NewKMSSigner(provider, cfg.KMS.AliCloud.KeyID, cfg.KMS.Timeout), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported KMS_PROVIDER=%q; supported values: aws, alicloud", cfg.KMS.Provider)
 	}
 }
 

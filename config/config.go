@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config represent config keys.
@@ -19,11 +20,11 @@ type Config struct {
 	CertPath       services.PathCertificateService
 	Certificate    services.CertificateService
 
-	// SignerBackend selects the signing backend: "file" (default), "pkcs11", or "awskms".
+	// SignerBackend selects the signing backend: "file" (default), "pkcs11", or "kms".
 	SignerBackend string
 	// HSM holds connection config for the PKCS#11 backend.
 	HSM HSMConfig
-	// KMS holds connection config for the AWS KMS backend.
+	// KMS holds connection config for provider-based KMS backends.
 	KMS KMSConfig
 	// Signer is the initialized signing backend, set by main after startup.
 	Signer services.Signer
@@ -39,11 +40,30 @@ type HSMConfig struct {
 	KeyID      string // CKA_ID of the private key (hex string, e.g. "01"); used alongside KeyLabel to avoid duplicate-label ambiguity
 }
 
-// KMSConfig holds AWS KMS connection parameters.
-// Used when SIGNER_BACKEND=awskms.
+// KMSConfig holds provider-based KMS connection parameters.
+// Used when SIGNER_BACKEND=kms.
 type KMSConfig struct {
-	Region string // AWS region, e.g. "ap-southeast-1"
-	KeyID  string // KMS key ID or ARN
+	Provider string
+	Timeout  time.Duration
+	AWS      AWSKMSConfig
+	AliCloud AlibabaKMSConfig
+}
+
+// AWSKMSConfig holds AWS KMS connection parameters.
+type AWSKMSConfig struct {
+	Region string
+	KeyID  string
+}
+
+// AlibabaKMSConfig holds Alibaba Cloud KMS connection parameters.
+type AlibabaKMSConfig struct {
+	Mode            string
+	KeyID           string
+	Endpoint        string
+	RegionID        string
+	AccessKeyID     string
+	AccessKeySecret string
+	LocalScenario   string
 }
 
 func New() *Config {
@@ -70,8 +90,21 @@ func New() *Config {
 			KeyID:      getEnv("HSM_KEY_ID", ""),
 		},
 		KMS: KMSConfig{
-			Region: getEnv("AWS_KMS_REGION", "ap-southeast-1"),
-			KeyID:  getEnv("AWS_KMS_KEY_ID", ""),
+			Provider: strings.ToLower(strings.TrimSpace(getEnv("KMS_PROVIDER", ""))),
+			Timeout:  time.Duration(getEnvAsInt("KMS_TIMEOUT_SECONDS", 10)) * time.Second,
+			AWS: AWSKMSConfig{
+				Region: getEnv("AWS_KMS_REGION", "ap-southeast-1"),
+				KeyID:  getEnv("AWS_KMS_KEY_ID", ""),
+			},
+			AliCloud: AlibabaKMSConfig{
+				Mode:            strings.ToLower(strings.TrimSpace(getEnv("ALICLOUD_KMS_MODE", ""))),
+				KeyID:           getEnv("ALICLOUD_KMS_KEY_ID", ""),
+				Endpoint:        getEnv("ALICLOUD_KMS_ENDPOINT", ""),
+				RegionID:        getEnv("ALICLOUD_REGION_ID", ""),
+				AccessKeyID:     getEnv("ALICLOUD_ACCESS_KEY_ID", ""),
+				AccessKeySecret: getEnv("ALICLOUD_ACCESS_KEY_SECRET", ""),
+				LocalScenario:   strings.ToLower(strings.TrimSpace(getEnv("ALICLOUD_KMS_LOCAL_SCENARIO", "success"))),
+			},
 		},
 	}
 }
@@ -93,6 +126,16 @@ func getEnv(key string, defaultVal string) string {
 func getEnvAsBool(name string, defaultVal bool) bool {
 	valStr := getEnv(name, "")
 	if val, err := strconv.ParseBool(valStr); err == nil {
+		return val
+	}
+
+	return defaultVal
+}
+
+// Helper to read an environment variable into an int or return default value.
+func getEnvAsInt(name string, defaultVal int) int {
+	valStr := getEnv(name, "")
+	if val, err := strconv.Atoi(valStr); err == nil {
 		return val
 	}
 
